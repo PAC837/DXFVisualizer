@@ -1,0 +1,36 @@
+{
+  "name": "simple-electron-app",
+  "version": "1.0.0",
+  "description": "A simple Electron app with a button that says 'hey' and displays 'world' when clicked",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "build": "electron-builder"
+  },
+  "keywords": [
+    "electron",
+    "simple",
+    "button",
+    "app"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^27.0.0"
+  },
+  "build": {
+    "appId": "com.example.simple-electron-app",
+    "productName": "Simple Electron App",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "**/*",
+      "!node_modules/**/*"
+    ],
+    "win": {
+      "target": "nsis"
+    }
+  }
+}
