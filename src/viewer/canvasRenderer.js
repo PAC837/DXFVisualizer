@@ -22,6 +22,16 @@ export function createCanvasRenderer(canvas, opts = {}) {
   const dpr = Math.max(1, window.devicePixelRatio || 1);
   /** @type {CanvasRenderingContext2D} */
   const ctx = canvas.getContext("2d");
+  
+  // Extract new options
+  const {
+    selectedIndices = new Set(),
+    closedParts = new Set(), // Indices of closed parts (render blue)
+    onPolylineClick = () => {},
+    onPartDragStart = () => {},
+    onPartDrag = () => {},
+    onPartDragEnd = () => {},
+  } = opts;
 
   const state = {
     polylines: [],
@@ -33,6 +43,10 @@ export function createCanvasRenderer(canvas, opts = {}) {
     isPanning: false,
     panStart: { x: 0, y: 0 },
     transformStart: { tx: 0, ty: 0 },
+    isDraggingSelection: false,
+    selectionStart: { x: 0, y: 0 },
+    selectionEnd: { x: 0, y: 0 },
+    isWindowSelection: true, // true = left-to-right (window), false = right-to-left (crossing)
   };
 
   // ---------- Sizing / HiDPI ----------
@@ -123,11 +137,17 @@ export function createCanvasRenderer(canvas, opts = {}) {
   function drawPolyline(poly, index) {
     if (!poly?.vertices?.length) return;
     
-    // Check if this polyline is selected
-    const isSelected = opts.selectedIndices && opts.selectedIndices.has(index);
+    // Check if this polyline is selected or a closed part
+    const isSelected = selectedIndices && selectedIndices.has(index);
+    const isClosedPart = closedParts && closedParts.has(index);
     
-    ctx.strokeStyle = isSelected ? "#f59e0b" : "#22c55e"; // orange if selected, green otherwise
-    ctx.lineWidth = isSelected ? 3 : 2; // thicker if selected
+    // Color priority: Orange (selected) > Blue (closed part) > Green (normal)
+    let strokeColor = "#22c55e"; // green (normal lines)
+    if (isClosedPart) strokeColor = "#3b82f6"; // blue (closed parts) 
+    if (isSelected) strokeColor = "#f59e0b"; // orange (selected - highest priority)
+    
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = isSelected ? 3 : (isClosedPart ? 2.5 : 2); // thicker if selected or closed part
     ctx.setLineDash([]);
     
     ctx.beginPath();
@@ -219,6 +239,115 @@ export function createCanvasRenderer(canvas, opts = {}) {
     return Math.sqrt(pdx * pdx + pdy * pdy);
   }
 
+  // ---------- Drag Selection ----------
+  function performDragSelection() {
+    // Convert screen selection box to world coordinates
+    const worldStart = screenToWorld(state.selectionStart);
+    const worldEnd = screenToWorld(state.selectionEnd);
+    
+    const minX = Math.min(worldStart.x, worldEnd.x);
+    const maxX = Math.max(worldStart.x, worldEnd.x);
+    const minY = Math.min(worldStart.y, worldEnd.y);
+    const maxY = Math.max(worldStart.y, worldEnd.y);
+    
+    console.log("[DRAG-SELECT]", state.isWindowSelection ? "Window" : "Crossing", "selection:", 
+      minX.toFixed(2), minY.toFixed(2), "to", maxX.toFixed(2), maxY.toFixed(2));
+    
+    const selectedIndices = [];
+    
+    for (let i = 0; i < state.polylines.length; i++) {
+      const poly = state.polylines[i];
+      if (!poly?.vertices?.length) continue;
+      
+      let isSelected = false;
+      
+      if (state.isWindowSelection) {
+        // Window selection: ALL vertices must be inside the box
+        isSelected = poly.vertices.every(v => 
+          v.x >= minX && v.x <= maxX && v.y >= minY && v.y <= maxY
+        );
+      } else {
+        // Crossing selection: ANY part of the polyline intersects the box
+        isSelected = poly.vertices.some(v => 
+          v.x >= minX && v.x <= maxX && v.y >= minY && v.y <= maxY
+        ) || polylineIntersectsBox(poly, minX, minY, maxX, maxY);
+      }
+      
+      if (isSelected) {
+        selectedIndices.push(i);
+      }
+    }
+    
+    console.log("[DRAG-SELECT] Selected", selectedIndices.length, "polylines:", selectedIndices);
+    return selectedIndices;
+  }
+  
+  function polylineIntersectsBox(poly, minX, minY, maxX, maxY) {
+    // Check if any line segment intersects the selection box
+    for (let i = 0; i < poly.vertices.length - 1; i++) {
+      const v1 = poly.vertices[i];
+      const v2 = poly.vertices[i + 1];
+      
+      if (lineIntersectsBox(v1.x, v1.y, v2.x, v2.y, minX, minY, maxX, maxY)) {
+        return true;
+      }
+    }
+    
+    // Check closing segment for closed polylines
+    if (poly.closed && poly.vertices.length > 2) {
+      const vFirst = poly.vertices[0];
+      const vLast = poly.vertices[poly.vertices.length - 1];
+      if (lineIntersectsBox(vLast.x, vLast.y, vFirst.x, vFirst.y, minX, minY, maxX, maxY)) {
+        return true;
+      }
+    }
+    
+    return false;
+  }
+  
+  function lineIntersectsBox(x1, y1, x2, y2, boxMinX, boxMinY, boxMaxX, boxMaxY) {
+    // Simple line-box intersection test
+    const lineMinX = Math.min(x1, x2);
+    const lineMaxX = Math.max(x1, x2);
+    const lineMinY = Math.min(y1, y2);
+    const lineMaxY = Math.max(y1, y2);
+    
+    // Check if line bounding box overlaps with selection box
+    return !(lineMaxX < boxMinX || lineMinX > boxMaxX || lineMaxY < boxMinY || lineMinY > boxMaxY);
+  }
+  
+  function drawSelectionBox() {
+    if (!state.isDraggingSelection) return;
+    
+    const x1 = state.selectionStart.x;
+    const y1 = state.selectionStart.y;
+    const x2 = state.selectionEnd.x;
+    const y2 = state.selectionEnd.y;
+    
+    const left = Math.min(x1, x2);
+    const top = Math.min(y1, y2);
+    const width = Math.abs(x2 - x1);
+    const height = Math.abs(y2 - y1);
+    
+    // Different colors and styles for window vs crossing selection
+    if (state.isWindowSelection) {
+      // Window selection: blue solid box
+      ctx.strokeStyle = "#3b82f6";
+      ctx.fillStyle = "rgba(59, 130, 246, 0.1)";
+      ctx.setLineDash([]);
+    } else {
+      // Crossing selection: green dashed box
+      ctx.strokeStyle = "#22c55e";
+      ctx.fillStyle = "rgba(34, 197, 94, 0.1)";
+      ctx.setLineDash([5, 5]);
+    }
+    
+    ctx.lineWidth = 1;
+    ctx.fillRect(left, top, width, height);
+    ctx.strokeRect(left, top, width, height);
+    ctx.setLineDash([]); // Reset dash
+  }
+
   // ---------- Event handlers ----------
   function getMousePos(e) {
     const rect = canvas.getBoundingClientRect();
@@ -232,33 +361,82 @@ export function createCanvasRenderer(canvas, opts = {}) {
     if (e.button !== 0) return; // left button only
     const pos = getMousePos(e);
     
-    // Check if clicking on a polyline for selection
+    // Check if clicking on a polyline
     const clickedIndex = hitTestPolylines(pos);
-    if (clickedIndex !== -1 && opts.onPolylineClick) {
-      opts.onPolylineClick(clickedIndex, e.shiftKey);
-      return; // Don't start panning
+    if (clickedIndex !== -1) {
+      const isClosedPart = closedParts && closedParts.has(clickedIndex);
+      
+      if (isClosedPart) {
+        // Start part dragging for blue closed parts
+        const worldPos = screenToWorld(pos);
+        onPartDragStart(clickedIndex, worldPos.x, worldPos.y);
+        state.isDraggingPart = true;
+        canvas.style.cursor = "move";
+        e.preventDefault();
+        return;
+      } else if (onPolylineClick) {
+        // Regular selection for non-closed parts
+        onPolylineClick(clickedIndex, e.shiftKey);
+        return;
+      }
     }
     
-    state.isPanning = true;
-    state.panStart = pos;
-    state.transformStart = { tx: state.tx, ty: state.ty };
-    canvas.style.cursor = "grabbing";
+    // Start drag selection (empty area clicked)
+    state.isDraggingSelection = true;
+    state.selectionStart = pos;
+    state.selectionEnd = pos;
+    canvas.style.cursor = "crosshair";
     e.preventDefault();
   }
 
   function onMouseMove(e) {
-    if (!state.isPanning) return;
     const pos = getMousePos(e);
-    const dx = pos.x - state.panStart.x;
-    const dy = pos.y - state.panStart.y;
-    state.tx = state.transformStart.tx + dx;
-    state.ty = state.transformStart.ty + dy;
-    render();
-    if (opts.onTransform) opts.onTransform();
+    
+    if (state.isDraggingPart) {
+      // Part dragging mode
+      const worldPos = screenToWorld(pos);
+      onPartDrag(worldPos.x, worldPos.y);
+      return;
+    }
+    
+    if (state.isDraggingSelection) {
+      // Drag selection mode
+      state.selectionEnd = pos;
+      
+      // Determine selection type: left-to-right = window, right-to-left = crossing
+      state.isWindowSelection = state.selectionEnd.x >= state.selectionStart.x;
+      
+      render(); // Redraw with selection box
+      return;
+    }
+    
+    if (state.isPanning) {
+      // Canvas panning mode
+      const dx = pos.x - state.panStart.x;
+      const dy = pos.y - state.panStart.y;
+      state.tx = state.transformStart.tx + dx;
+      state.ty = state.transformStart.ty + dy;
+      render();
+      if (opts.onTransform) opts.onTransform();
+    }
   }
 
   function onMouseUp(e) {
-    if (state.isPanning) {
+    if (state.isDraggingPart) {
+      state.isDraggingPart = false;
+      onPartDragEnd();
+      canvas.style.cursor = "grab";
+    } else if (state.isDraggingSelection) {
+      // Complete drag selection
+      const selectedIndices = performDragSelection();
+      if (opts.onSelectionDrag) {
+        opts.onSelectionDrag(selectedIndices, e.shiftKey);
+      }
+      
+      state.isDraggingSelection = false;
+      canvas.style.cursor = "grab";
+      render(); // Clear selection box
+    } else if (state.isPanning) {
       state.isPanning = false;
       canvas.style.cursor = "grab";
     }
@@ -296,6 +474,9 @@ export function createCanvasRenderer(canvas, opts = {}) {
     for (let i = 0; i < state.polylines.length; i++) {
       drawPolyline(state.polylines[i], i);
     }
+    
+    // Draw selection box on top
+    drawSelectionBox();
   }
 
   function setData(polylines) {
