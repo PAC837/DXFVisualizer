@@ -1,16 +1,236 @@
-<!DOCTYPE html>
+<!--
+DXF Convert App — Minimal static web app
+Purpose: Upload a DXF file, parse polylines, preview on canvas, close polylines, and export to Mozaik JSON (v0.1).
+Notes:
+- Uses small modular JS files under /src/* following .clinerules/FILES.md
+- No build step; open this file in a browser (or VSCode Live Server)
+- Scripts loaded as ES modules via main.js orchestrator
+-->
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Simple Electron App</title>
-    <link rel="stylesheet" href="style.css">
+  <meta charset="utf-8" />
+  <title>DXF Convert App — Polyline Preview, Close, Export</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #111827;
+      --muted: #6b7280;
+      --text: #e5e7eb;
+      --accent: #22c55e;
+      --warn: #f59e0b;
+      --btn: #1f2937;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    }
+    header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 14px; background: #0b1224; border-bottom: 1px solid #1f2937;
+    }
+    header h1 { margin: 0; font-size: 16px; font-weight: 600; }
+    #app {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      grid-auto-rows: 1fr;
+      height: calc(100% - 48px);
+    }
+    aside {
+      background: var(--panel);
+      border-right: 1px solid #1f2937;
+      padding: 12px;
+      overflow: auto;
+    }
+    main {
+      position: relative;
+      background: #0a0f21;
+    }
+    .section { margin-bottom: 16px; }
+    .section h2 {
+      font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em;
+      color: var(--muted); margin: 0 0 8px 0;
+    }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .stack { display: flex; flex-direction: column; gap: 6px; }
+    .muted { color: var(--muted); font-size: 12px; }
+    .small { font-size: 12px; }
+    .btn {
+      background: var(--btn); border: 1px solid #374151; color: var(--text);
+      padding: 8px 10px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 13px;
+    }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary { background: #14532d; border-color: #166534; }
+    .btn-warn { background: #7c2d12; border-color: #b45309; }
+    .chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 8px; border-radius: 999px; border: 1px solid #374151; color: var(--muted); font-size: 12px;
+    }
+    #canvas {
+      width: 100%; height: 100%;
+      display: block;
+      background: #0a0f21;
+    }
+    .status {
+      position: absolute; left: 10px; bottom: 10px; right: 10px;
+      display: flex; justify-content: space-between; align-items: center;
+      gap: 8px; padding: 8px 10px; border-radius: 6px;
+      background: rgba(17, 24, 39, 0.75); border: 1px solid #1f2937;
+      font-size: 12px; color: var(--muted);
+    }
+    code { background: #0b1224; padding: 2px 6px; border-radius: 4px; border: 1px solid #1f2937; }
+    .kbd { border: 1px solid #374151; padding: 1px 5px; border-radius: 4px; font-size: 11px; color: var(--muted); }
+    a.link { color: #93c5fd; text-decoration: none; }
+    a.link:hover { text-decoration: underline; }
+    select, input[type="number"], input[type="text"] {
+      background: var(--btn); border: 1px solid #374151; color: var(--text);
+      padding: 6px 8px; border-radius: 6px; font-size: 13px;
+    }
+    label { font-size: 12px; color: var(--muted); }
+  </style>
 </head>
 <body>
-    <div class="container">
-        <button id="heyButton">hey</button>
-        <div id="message"></div>
+  <header>
+    <h1>DXF Convert App</h1>
+    <div class="row">
+      <span class="chip" title="Detected units from $INSUNITS header (or overridden)">
+        Units: <strong id="unitsLabel">—</strong>
+      </span>
+      <span class="chip" title="Polylines currently loaded">
+        Polylines: <strong id="polyCount">0</strong>
+      </span>
     </div>
-    <script src="renderer.js"></script>
+  </header>
+
+  <div id="app">
+    <aside>
+      <div class="section">
+        <h2>1) Load DXF</h2>
+        <div class="stack">
+          <input type="file" id="fileInput" accept=".dxf,text/plain" />
+          <div class="muted small">
+            Tip: Use an ASCII DXF. Drag & drop onto the canvas also works.
+          </div>
+          <div class="muted small">
+            Focus: PERIMETER layer only (other layers later).
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>2) View</h2>
+        <div class="row">
+          <button id="btnFit" class="btn" disabled>Fit to View</button>
+          <label class="row">
+            <span class="muted small">Grid</span>
+            <input id="gridToggle" type="checkbox" style="margin-left:6px" />
+          </label>
+        </div>
+        <div class="muted small">Pan: drag • Zoom: wheel • Reset: Fit</div>
+      </div>
+
+      <div class="section">
+        <h2>3) Units</h2>
+        <div class="stack">
+          <div class="muted small">
+            Detected from $INSUNITS when present. Override if missing/ambiguous.
+          </div>
+          <div class="row">
+            <label for="unitsSelect">Override:</label>
+            <select id="unitsSelect">
+              <option value="">Auto</option>
+              <option value="in">Inches</option>
+              <option value="mm">Millimeters</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>4) Select & Join</h2>
+        <div class="stack">
+          <div class="row">
+            <button id="btnJoin" class="btn btn-primary" disabled>Join Selected Lines</button>
+            <button id="btnAutoJoin" class="btn btn-primary" disabled>Auto-Join All</button>
+          </div>
+          <div class="row">
+            <button id="btnDelete" class="btn btn-warn" disabled>Delete Selected</button>
+            <button id="btnClearSelection" class="btn" disabled>Clear Selection</button>
+          </div>
+          <div class="row">
+            <label for="tolInput">Join Tolerance</label>
+            <input id="tolInput" type="number" step="0.0001" value="0.001" style="width:100px" />
+            <span class="muted small">in (or mm when units=mm)</span>
+          </div>
+          <div class="muted small">
+            <strong>Click</strong> to select • <strong>Shift+Click</strong> for multi-select • <strong>Delete key</strong> to remove selected
+          </div>
+          <div class="muted small">
+            Selected: <strong id="selectedCount">0</strong> lines
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>4b) Dimensions</h2>
+        <div class="stack">
+          <div class="row">
+            <label>
+              <input id="showDimensions" type="checkbox" style="margin-right:6px" />
+              Show Dimension Lines
+            </label>
+          </div>
+          <div class="row">
+            <span class="muted small">Width: <strong id="partWidth">—</strong></span>
+            <span class="muted small">Height: <strong id="partHeight">—</strong></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>5) Export</h2>
+        <div class="stack">
+          <div class="row">
+            <button id="btnExportDXF" class="btn btn-primary" disabled>Export to DXF</button>
+            <button id="btnExportJSON" class="btn" disabled>Export to JSON</button>
+          </div>
+          <div class="row">
+            <label for="fileName">Name</label>
+            <input id="fileName" type="text" placeholder="part-name" value="mozaik-part" style="width:160px" />
+          </div>
+          <div class="muted small">
+            <strong>DXF:</strong> Export back to DXF format with joined lines<br>
+            <strong>JSON:</strong> Export to Mozaik-compatible format
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>6) Debug</h2>
+        <div class="stack">
+          <div class="row">
+            <button id="btnDebug" class="btn">Show Debug Logs</button>
+            <button id="btnClearLogs" class="btn">Clear</button>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <main>
+      <canvas id="canvas"></canvas>
+      <div class="status">
+        <div>
+          <span id="statusText">Load a DXF to begin.</span>
+        </div>
+        <div class="muted">
+          <span class="kbd">Drag</span> pan • <span class="kbd">Wheel</span> zoom • <span class="kbd">Fit</span> reset
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script type="module" src="./main.js"></script>
 </body>
 </html>

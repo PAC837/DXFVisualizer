@@ -1,36 +1,33 @@
 {
-  "name": "simple-electron-app",
+  "name": "dxf-convert-app",
   "version": "1.0.0",
-  "description": "A simple Electron app with a button that says 'hey' and displays 'world' when clicked",
-  "main": "main.js",
+  "description": "DXF Convert App - Upload, parse, close polylines, and export to Mozaik JSON",
+  "main": "electron-main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "electron .",
+    "dev": "electron . --dev",
     "build": "electron-builder"
   },
-  "keywords": [
-    "electron",
-    "simple",
-    "button",
-    "app"
-  ],
-  "author": "Your Name",
+  "author": "DXF Visualizer",
   "license": "MIT",
   "devDependencies": {
-    "electron": "^27.0.0"
+    "electron": "^28.0.0",
+    "electron-builder": "^24.0.0"
   },
   "build": {
-    "appId": "com.example.simple-electron-app",
-    "productName": "Simple Electron App",
+    "appId": "com.dxfvisualizer.convert",
+    "productName": "DXF Convert App",
     "directories": {
       "output": "dist"
     },
     "files": [
       "**/*",
-      "!node_modules/**/*"
+      "!node_modules",
+      "!dist"
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": null
     }
   }
 }
