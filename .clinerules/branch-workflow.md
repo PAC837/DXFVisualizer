@@ -51,6 +51,8 @@ git checkout main
 ## Enforcement
 - This rule applies to all development work in this workspace
 - AI assistants should always remind about branching when making changes
+- **NEVER push to main without explicit user permission** - always ask first
+- **User will tell AI when to push to main** - wait for confirmation
 - Never commit to main without explicit user confirmation for emergency cases
 
 ## Benefits
